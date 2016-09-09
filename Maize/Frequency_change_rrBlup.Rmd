@@ -1,0 +1,336 @@
+---
+title: "WQS Test of Selection"
+author: "Timothy M. Beissinger"
+date: "November 2, 2015"
+output: html_document
+---
+
+Data from Lorenz, 2015 (G3) will be re-visited to test the hypothesis that the reason selection mapping and GWAS yielded no results, despite moderate to high heritabilities and phenotypic change, was because the selected traits were highly quantitative. To do this, allelic effects estimates from GWAS will be imported and allele frequency change from cycle 2 to cycle 5 will be computed. Then, the sum of frequency change multiplied by effect size will be computed. If GWAS effects and frequency changes are related, this sum should be non-zero and in the direction that the trait was selected. A permutation test will be conducted to test for significance.
+
+### Data loading and prep
+
+First we read in the Genotypes and phenotypes. There are not many markers here, and the reason why not is not explained in the paper... Something to ask Aaron about.
+
+```{r}
+### genos
+setwd("/home/beissinger/Documents/WQS_Prediction/Frequency_change/")
+wqsGeno <- read.csv('../../WQS/DATA/genoWQS_randImp.csv',header=T,stringsAsFactors=F)
+```
+
+Now we'll import the map.
+
+```{r}
+wqsMap <- read.csv('../../WQS/DATA/wqsMap_randImp.csv',stringsAsFactors=F)
+```
+
+Gapit cannot work with non-integer chromosomes. Remove those labeled "0"
+```{r}
+remMap <- which(wqsMap$Chromosome == 0)
+remGeno <- remMap+1
+
+wqsGeno<-wqsGeno[,-remGeno]
+wqsMap<-wqsMap[-remMap,]
+```
+
+Now split individuals into different data frames according to their cycle
+
+```{r}
+names(wqsGeno)[1] <- "Taxa"
+CycleIndicator <- as.numeric(unlist(strsplit(wqsGeno$Taxa,split="_C"))[seq(2,2*nrow(wqsGeno),2)])
+
+Cycle0 <- wqsGeno[which(CycleIndicator == 0),]
+Cycle1 <- wqsGeno[which(CycleIndicator == 1),]
+Cycle2 <- wqsGeno[which(CycleIndicator == 2),]
+Cycle3 <- wqsGeno[which(CycleIndicator == 3),]
+Cycle4 <- wqsGeno[which(CycleIndicator == 4),]
+Cycle5 <- wqsGeno[which(CycleIndicator == 5),]
+CycleList <- list(Cycle0,Cycle1,Cycle2,Cycle3,Cycle4,Cycle5)
+```
+
+### Analysis
+
+The next step is to calculate the allele frequency at each cycle. 
+
+```{r}
+frequencies<-matrix(nrow=ncol(wqsGeno)-1,ncol=6)
+for(i in 1:6){
+frequencies[,i] <- colMeans(CycleList[[i]][,-1],na.rm=T)/2
+}
+frequencies <- as.data.frame(frequencies)
+names(frequencies) <- c("Cycle0","Cycle1","Cycle2","Cycle3","Cycle4","Cycle5")
+```
+
+Now compute allele frequency change from cycle 2 to 5 and make a histogram
+```{r}
+change<-frequencies$Cycle5-frequencies$Cycle2
+hist(change,main=paste("Histogram of C2 to C5 Frequency Change, Mean=",round(mean(change,na.rm=T),digits=3),sep=""))
+```
+
+
+Now load in phenotypes to enable calculating effects estimates.
+```{r}
+### phenos
+setwd("/home/beissinger/Documents/WQS_Prediction/GWAS_effects/")
+adf <- read.csv('../Previous_G3/wqsSupportingData/adfBlups.csv', head=TRUE,stringsAsFactors=F)
+ndf <- read.csv('../Previous_G3/wqsSupportingData/ndfBlups.csv', head=TRUE,stringsAsFactors=F)
+ivd <- read.csv('../Previous_G3/wqsSupportingData/ivdBlups.csv', head=TRUE,stringsAsFactors=F)
+cp <- read.csv('../Previous_G3/wqsSupportingData/cpBlups.csv', head=TRUE,stringsAsFactors=F)
+drymat <- read.csv('../Previous_G3/wqsSupportingData/dmBlups.csv', head=TRUE,stringsAsFactors=F)
+starch <- read.csv('../Previous_G3/wqsSupportingData/starchBlups.csv', head=TRUE,stringsAsFactors=F)
+yield <- read.csv('../Previous_G3/wqsSupportingData/yieldBlups.csv', head=TRUE,stringsAsFactors=F)
+
+### restore working directory
+setwd("/home/beissinger/Documents/WQS_Prediction/Frequency_change/")
+```
+
+Now reformat genotypes file. Reorganize by coding to -1,0,1 and so that markers are columns, individuals are rows.
+```{r}
+geno<-wqsGeno
+geno[,2:nrow(geno)] <- 1-geno[,2:nrow(geno)]
+```
+
+Now write a function to compute effects using the rrBLUP package
+```{r}
+library(rrBLUP)
+rrblupFunction <- function(geno, pheno, map,main){
+  ##drop "_CX" from rownames in geno
+  names(geno)[1] <- "Taxa"
+  geno$Taxa <- gsub('...$', '', wqsGeno$Taxa) 
+
+  ##remove inds without geno & pheno
+    ndx <- match(geno[, 1], pheno[, 1])
+    noPheno <- geno[, 1][which(is.na(ndx))]
+    geno2 <- geno[-which(is.na(ndx)), ]
+    ndx2 <- ndx[-which(is.na(ndx))]
+    pheno2 <- pheno[ndx2, ]
+    
+    ##Calculate numbers for each cycle
+    cycleIndNum <- vector(length=5)
+    cycleIndNum[1] <- length(which(pheno2$Cycle=='C0'))
+    cycleIndNum[2] <- length(which(pheno2$Cycle=='C1'))
+    cycleIndNum[3] <- length(which(pheno2$Cycle=='C2'))
+    cycleIndNum[4] <- length(which(pheno2$Cycle=='C3'))
+    cycleIndNum[5] <- length(which(pheno2$Cycle=='C4'))
+    yr <- as.character(pheno2$Cycle)
+    pheno2 <- pheno2[, c(1, 2)]
+    
+    ##Remove individuals with missing phenoypte (these rows were in phenotype file as NA)
+    pheno3<-pheno2[which(is.na(pheno2[,2])==F),]
+    geno3<-geno2[which(is.na(pheno2[,2])==F),]
+    print(paste("In total", nrow(geno3), "individuals."))
+
+    #run rrBLUP
+    result <- mixed.solve(pheno2[,2], Z= as.matrix(geno2[,2:ncol(geno2)]), K=NULL, SE=F, return.Hinv=FALSE,method="ML") #don't use cycle as a covariate!
+    
+    ##Plot predicted vs actual
+    effects <- result$u
+    effects.mat <- as.matrix(effects)
+    predicted <- as.matrix(geno2[,2:ncol(geno2)]) %*% effects.mat
+    predicted = predicted[,1] + result$beta
+    plot(pheno2[,2],predicted,xlab="True phenos",ylab="Predicted phenos",main=main)
+    
+    return(result$u)
+}
+
+
+```
+
+Now run rrBLUP
+```{r}
+effects.ADF<-rrblupFunction(geno,adf,wqsMap,main="ADF")
+effects.NDF<-rrblupFunction(geno,ndf,wqsMap,main="NDF")
+effects.IVD<-rrblupFunction(geno,ivd,wqsMap,main="IVD")
+effects.CP<-rrblupFunction(geno,cp,wqsMap,main="Crude Protein")
+effects.drymat<-rrblupFunction(geno,drymat,wqsMap,main="Dry matter")
+effects.starch<-rrblupFunction(geno,starch,wqsMap,main="Starch")
+effects.yield<-rrblupFunction(geno,yield,wqsMap,main="Yield")
+```
+
+
+Now compute the sum of frequency*change
+```{r}
+adf_result <- sum(change*effects.ADF,na.rm=T)
+ndf_result <- sum(change*effects.NDF,na.rm=T)
+ivd_result <- sum(change*effects.IVD,na.rm=T)
+cp_result <- sum(change*effects.CP,na.rm=T)
+starch_result <- sum(change*effects.starch,na.rm=T)
+yield_result <- sum(change*effects.yield,na.rm=T)
+drymat_result <- sum(change*effects.drymat,na.rm=T)
+```
+
+Now do a quick permutation test. Are there reason that permuting SNPs is not a valid approach? (I can't think of any at the moment)
+```{r}
+adf_test<-c(); ndf_test<-c(); ivd_test<-c(); cp_test<-c(); starch_test<-c(); yield_test<-c(); drymat_test<-c()
+for(i in 1:1000){
+  boot <- sample(change,length(change),replace=T)
+  adf_test[i]<-sum(boot*effects.ADF,na.rm=T)
+  ndf_test[i]<-sum(boot*effects.NDF,na.rm=T) 
+  ivd_test[i]<-sum(boot*effects.IVD,na.rm=T)
+  cp_test[i]<-sum(boot*effects.CP,na.rm=T)
+  starch_test[i]<-sum(boot*effects.starch,na.rm=T)
+  yield_test[i]<-sum(boot*effects.yield,na.rm=T)
+  drymat_test[i]<-sum(boot*effects.drymat,na.rm=T)
+  }
+```
+
+### Results
+Plots below show the distribution of null tests compared to the observed value. For all traits but yield, we have a significant result! Could this be right?
+
+
+```{r,echo=FALSE}
+hist(adf_test,xlim=sort(c(-1.25*adf_result,1.25*adf_result)), main="ADF test for quantitative selection")
+abline(v=adf_result,col="red")
+legend("topright","c(x,y)",c("Observed ADF test stat"),col="red",pch="|")
+
+png("ADF_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(adf_test,xlim=sort(c(-1.25*adf_result,1.25*adf_result)), main="Acid Detergent Fiber",cex.main=2,cex.lab=2)
+abline(v=adf_result,col="red",lwd=5)
+legend("topright","c(x,y)",c("Observed ADF test stat"),col="red",pch="|")
+dev.off()
+
+hist(ndf_test,xlim=sort(c(-1.25*ndf_result,1.25*ndf_result)),main="NDF test for quantitative selection")
+abline(v=ndf_result,col="red")
+legend("topright","c(x,y)","Observed NDF test stat",col="red",pch="|")
+
+png("NDF_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(ndf_test,xlim=sort(c(-1.25*ndf_result,1.25*ndf_result)),main="Neutral Detergent Fiber",cex.main=2,cex.lab=2)
+abline(v=ndf_result,col="red",lwd=5)
+legend("topright","c(x,y)","Observed NDF test stat",col="red",pch="|")
+dev.off()
+
+
+hist(ivd_test,xlim=sort(c(-1.25*ivd_result,1.25*ivd_result)),main="IVD test for quantitative selection")
+abline(v=ivd_result,col="red")
+legend("topright","c(x,y)","Observed IVTD test stat",col="red",pch="|")
+
+png("IVD_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(ivd_test,xlim=sort(c(-1.25*ivd_result,1.25*ivd_result)),main="In Vitro Digestibility",cex.main=2,cex.lab=2)
+abline(v=ivd_result,col="red",lwd=5)
+legend("topleft","c(x,y)","Observed IVTD test stat",col="red",pch="|")
+dev.off()
+
+hist(cp_test,xlim=sort(c(-3*cp_result,3*cp_result)),main="CP test for quantitative selection")
+abline(v=cp_result,col="red")
+legend("topright","c(x,y)","Observed CP test stat",col="red",pch="|")
+
+png("CP_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(cp_test,xlim=sort(c(-3*cp_result,3*cp_result)),main="Crude Protein",cex.main=2,cex.lab=2)
+abline(v=cp_result,col="red",lwd=5)
+legend("topright","c(x,y)","Observed CP test stat",col="red",pch="|")
+dev.off()
+
+hist(starch_test,xlim=sort(c(-1.25*starch_result,1.25*starch_result)),main="Starch test for quantitative selection")
+abline(v=starch_result,col="red")
+legend("topright","c(x,y)","Observed starch test stat",col="red",pch="|")
+
+
+png("STARCH_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(starch_test,xlim=sort(c(-1.25*starch_result,1.25*starch_result)),main="Starch",cex.main=2,cex.lab=2)
+abline(v=starch_result,col="red",lwd=5)
+legend("topleft","c(x,y)","Observed starch test stat",col="red",pch="|")
+dev.off()
+
+hist(yield_test,xlim=sort(c(-1.25*yield_result,1.25*yield_result)),main="Yield test for quantitative selection")
+abline(v=yield_result,col="red")
+legend("topright","c(x,y)","Observed yield test stat",col="red",pch="|")
+
+png("YIELD_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(yield_test,xlim=sort(c(-1.25*yield_result,1.25*yield_result)),main="Yield",cex.main=2,cex.lab=2)
+abline(v=yield_result,col="red",lwd=5)
+legend("topleft","c(x,y)","Observed yield test stat",col="red",pch="|")
+dev.off()
+
+hist(drymat_test,xlim=sort(c(-8*drymat_result,8*drymat_result)),main="Dry matter test for quantitative selection")
+abline(v=drymat_result,col="red")
+legend("topright","c(x,y)","Observed dry matter test stat",col="red",pch="|")
+
+png("DryMatter_rrblup.png",pointsize=18, height=600, width=800)
+par(mar=c(5.1,5.1,4.1,2.1))
+hist(drymat_test,xlim=sort(c(-8*drymat_result,8*drymat_result)),main="Dry Matter",cex.main=2,cex.lab=2)
+abline(v=drymat_result,col="red",lwd=5)
+legend("topright","c(x,y)","Observed dry matter test stat",col="red",pch="|")
+dev.off()
+```
+
+Test the correlation between trait allelic effects and frequency change.
+
+```{r}
+cor.test(change,effects.ADF,na.rm=T)
+cor.test(change,effects.NDF,na.rm=T)
+cor.test(change,effects.IVD,na.rm=T)
+cor.test(change,effects.CP,na.rm=T)
+cor.test(change,effects.starch,na.rm=T)
+cor.test(change,effects.yield,na.rm=T)
+cor.test(change,effects.drymat,na.rm=T)
+```
+
+
+Now make pretty cumulative plots for each trait, like Jochen did with milk yield.
+
+```{r}
+cumulative <- data.frame(adf=rep(NA,nrow(wqsMap)),ndf=NA,ivd=NA,cp=NA,starch=NA,yield=NA,drymat=NA)
+for(i in 1:nrow(cumulative)){
+  if(i==1){
+  cumulative$adf[i] <- change[i]*effects.ADF[i]
+  cumulative$ndf[i] <- change[i]*effects.NDF[i]
+  cumulative$ivd[i] <- change[i]*effects.IVD[i]
+  cumulative$cp[i] <- change[i]*effects.CP[i] 
+  cumulative$starch[i] <- change[i]*effects.starch[i]
+  cumulative$yield[i] <- change[i]*effects.yield[i]
+  cumulative$drymat[i] <- change[i]*effects.drymat[i]     
+  }
+  if(i>1){
+  cumulative$adf[i] <- cumulative$adf[i-1]+change[i]*effects.ADF[i]
+  cumulative$ndf[i] <- cumulative$ndf[i-1]+change[i]*effects.NDF[i]
+  cumulative$ivd[i] <- cumulative$ivd[i-1]+change[i]*effects.IVD[i]
+  cumulative$cp[i] <- cumulative$cp[i-1]+change[i]*effects.CP[i] 
+  cumulative$starch[i] <- cumulative$starch[i-1]+change[i]*effects.starch[i]
+  cumulative$yield[i] <- cumulative$yield[i-1]+change[i]*effects.yield[i]
+  cumulative$drymat[i] <- cumulative$drymat[i-1]+change[i]*effects.drymat[i]  
+  }
+}
+
+### Plots with thresholds
+pdf("cumulativePlots_rrblup.pdf")
+plot(cumulative$adf,col=wqsMap$Chromosome, main="Cumulative ADF freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-1.5,1.5))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(adf_test,c(0.025,0.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+
+plot(cumulative$ndf,col=wqsMap$Chromosome, main="Cumulative NDF freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-3,3))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(ndf_test,c(0.025,0.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+
+plot(cumulative$ivd,col=wqsMap$Chromosome, main="Cumulative IVTD freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-1e-05,1e-05))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(ivd_test,c(0.025,0.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+
+plot(cumulative$cp,col=wqsMap$Chromosome, main="Cumulative CP freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-1.5,1.5))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(cp_test,c(0.025,0.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+
+plot(cumulative$starch,col=wqsMap$Chromosome, main="Cumulative starch freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-2,2))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(starch_test,c(0.025,.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+
+plot(cumulative$yield,col=wqsMap$Chromosome, main="Cumulative yield freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-4e-06,4e-06))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(yield_test,c(0.025,0.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+
+plot(cumulative$drymat,col=wqsMap$Chromosome, main="Cumulative dry matter freq*eff",xlab="Chromosome",xaxt="n",ylim=c(-2,2))
+axis(1,c(-10000,700,2000,3300,4300,5300,6300,7000,8000,8700,9700,100000),lab=c(NA,1:10,NA))
+abline(h=quantile(drymat_test,c(0.025,0.975)),col="red")
+legend("topright","c(x,y)","Significance thresholds",col="red",pch="=")
+dev.off()
+```

@@ -1,0 +1,127 @@
+---
+title: "WQS GWAS Effects Estimates"
+author: "Timothy M. Beissinger"
+date: "November 2, 2015"
+output: html_document
+---
+
+Here I will use data and modify scripts from Lorenz, 2015 (G3) to do GWAS on the WQS population and to estimate SNP effect sizes.
+
+First we load the data.
+
+```{r}
+setwd("/home/beissinger/Documents/WQS_Prediction/GWAS_effects/")
+adf <- read.csv('../Previous_G3/wqsSupportingData/adfBlups.csv', head=TRUE,stringsAsFactors=F)
+ndf <- read.csv('../Previous_G3/wqsSupportingData/ndfBlups.csv', head=TRUE,stringsAsFactors=F)
+ivd <- read.csv('../Previous_G3/wqsSupportingData/ivdBlups.csv', head=TRUE,stringsAsFactors=F)
+cp <- read.csv('../Previous_G3/wqsSupportingData/cpBlups.csv', head=TRUE,stringsAsFactors=F)
+drymat <- read.csv('../Previous_G3/wqsSupportingData/dmBlups.csv', head=TRUE,stringsAsFactors=F)
+starch <- read.csv('../Previous_G3/wqsSupportingData/starchBlups.csv', head=TRUE,stringsAsFactors=F)
+yield <- read.csv('../Previous_G3/wqsSupportingData/yieldBlups.csv', head=TRUE,stringsAsFactors=F)
+```
+
+The next step is to read in the Genotypes. The published data is missing a map, so I'll import the data I have on this computer. There are not many markers here, and the reason why not is not explained in the paper... Something to talk to Aaron about.
+
+```{r}
+wqsGeno <- read.csv('../../WQS/DATA/genoWQS_randImp.csv',header=T,stringsAsFactors=F)
+```
+
+In order to match genotypes and phenotypes, we'll have to drop "_CX" from rownames.
+
+```{r}
+names(wqsGeno)[1] <- "Taxa"
+wqsGeno$Taxa <- gsub('...$', '', wqsGeno$Taxa) 
+```
+
+Now we'll import the map.
+
+```{r}
+wqsMap <- read.csv('../../WQS/DATA/wqsMap_randImp.csv',stringsAsFactors=F)
+```
+
+Gapit cannot work with non-integer chromosomes. Let's remove those labeled "0"
+
+```{r}
+remMap <- which(wqsMap$Chromosome == 0)
+remGeno <- remMap+1
+
+wqsGeno<-wqsGeno[,-remGeno]
+wqsMap<-wqsMap[-remMap,]
+```
+
+###GAPIT
+
+At this point, we'll load GAPIT and use it to do the GWAS.
+
+```{r}
+library(compiler)
+library(MASS)
+source("http://www.zzlab.net/GAPIT/emma.txt")
+source("http://www.zzlab.net/GAPIT/gapit_functions.txt") ### NEWEST CODE BROKEN!!!
+#source("http://zzlab.net/GAPIT/previous/gapit_functions_20151027.txt")
+library(multtest)
+library('gplots')
+library('LDheatmap')
+library('genetics')
+library(rrBLUP)
+library(scatterplot3d)
+```
+
+
+Now make a function to run GAPIT (Modified Aaron's function)
+
+```{r}
+assocFunction <- function(geno, pheno, map, PCs = 2){
+  ##remove inds without geno & pheno
+	ndx <- match(geno[, 1], pheno[, 1])
+	noPheno <- geno[, 1][which(is.na(ndx))]
+	geno2 <- geno[-which(is.na(ndx)), ]
+	ndx2 <- ndx[-which(is.na(ndx))]
+	pheno2 <- pheno[ndx2, ]
+	
+	##Calculate numbers for each cycle
+	cycleIndNum <- vector(length=5)
+	cycleIndNum[1] <- length(which(pheno2$Cycle=='C0'))
+	cycleIndNum[2] <- length(which(pheno2$Cycle=='C1'))
+	cycleIndNum[3] <- length(which(pheno2$Cycle=='C2'))
+	cycleIndNum[4] <- length(which(pheno2$Cycle=='C3'))
+	cycleIndNum[5] <- length(which(pheno2$Cycle=='C4'))
+	yr <- as.character(pheno2$Cycle)
+	pheno2 <- pheno2[, c(1, 2)]
+	
+	X <- model.matrix(~-1 + as.factor(yr))
+	X <- cbind(as.character(pheno2$ENTRY), X)
+	colnames(X) <- c("Taxa", rep("X", dim(X)[2]-1))
+	X <- as.data.frame(X)
+	
+	write.table(X, 'X.txt', row.names=FALSE, quote=FALSE)
+	X <- read.table('X.txt', head=TRUE)
+
+	result <- GAPIT(Y=pheno2, GD=geno2, GM=map, PCA.total=PCs, CV=X[, -2]) #don't use cycle as a covariate!
+	
+	##Calculate heritability over cycles
+#	h2 <- heritFunction(geno=geno2, pheno=pheno2[, 2], fixed=X[, -1])
+	
+#	return(h2)
+	}
+```
+
+
+Now we can run Gapit. For each run, I'll change the working directory to a trait-specific one.
+```{r, results="hide"}
+##Run Gapit
+setwd("GWAS_adf")
+adf_result <-assocFunction(geno=wqsGeno, pheno=adf, map=wqsMap)
+setwd("../GWAS_ndf")
+ndf_result <- assocFunction(geno=wqsGeno, pheno=ndf, map=wqsMap)
+setwd("../GWAS_ivd")
+ivd_result <- assocFunction(geno=wqsGeno, pheno=ivd, map=wqsMap)
+setwd("../GWAS_cp")
+cp_result <- assocFunction(geno=wqsGeno, pheno=cp, map=wqsMap,PCs=1) #rerun based on QQ-plot to 1 PC
+setwd("../GWAS_drymat")
+drymat_result <- assocFunction(geno=wqsGeno, pheno=drymat, map=wqsMap)
+setwd("../GWAS_starch")
+starch_result <- assocFunction(geno=wqsGeno, pheno=starch, map=wqsMap,PCs=1) #rerun based on QQ-plot to 1 PC
+setwd("../GWAS_yield")
+yield_result <- assocFunction(geno=wqsGeno, pheno=yield, map=wqsMap)
+```
