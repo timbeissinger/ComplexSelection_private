@@ -1,0 +1,138 @@
+---
+title: "WQS Test of Selection"
+author: "Timothy M. Beissinger"
+date: "June 9, 2015"
+output: html_document
+---
+
+Chicken data from Jochen and Henner will be used to test the hypothesis that selection has operated on quantitative traits in chickens. To do this, allelic effects estimates and allele frequency change over time were computed by Jochen. The sum of frequency change multiplied by effect size will be computed. If effects and frequency changes are related, this sum should be non-zero and in the direction that the trait was selected. A permutation test will be conducted to test for significance.
+
+### Data loading and prep
+
+```{r}
+### genos
+rawData <- readRDS("manhattanBrownWhiteAllPhenotypes_20160607.RDS")
+```
+
+Split raw data into white and brown lists
+```{r}
+white <- rawData$whiteLayers
+brown<-rawData$brownLayers
+```
+
+Now compute the sum of frequency*change
+```{r}
+result<-matrix(NA,nrow=2,ncol=length(white))
+colnames(result)<-names(white)
+rownames(result)<-c("white","brown")
+for(i in 1:length(white)){
+  result[1,i]<-sum(white[[i]]$alpha * white[[i]]$deltaP)
+  result[2,i]<-sum(brown[[i]]$alpha * brown[[i]]$deltaP)
+}
+```
+
+Now do a permutation test.
+```{r}
+
+
+permuted <- array(NA,dim=c(2,12,1000))
+
+for(j in 1:12){ # trait
+for(k in 1:1000){ #permutation
+  print(j); print(k)
+  boot <- sample(white[[j]]$deltaP,nrow(white[[j]]),replace=T)
+  permuted[1,j,k]<-sum(boot*white[[j]]$alpha)
+  
+  boot <- sample(brown[[j]]$deltaP,nrow(brown[[j]]),replace=T)
+  permuted[2,j,k]<-sum(boot*brown[[j]]$alpha)
+  }
+}
+```
+
+### Results
+Plots below show the distribution of null tests compared to the observed value.
+
+```{r,echo=FALSE}
+traits=c("Fracture Strength","Fracture Strength","Crack","Egg Weight","Egg Weight","Form","Feed","Body Weight","Egg White","Laying Rate","Laying Rate","Laying Rate")
+
+pdf("WhiteTests.pdf",height=7,width=17,pointsize=18)
+par(mfrow=c(2,2),mar=c(5,4,4,2))
+
+plot(NULL,xlim=c(0,1),ylim=c(0,1),axes=F,xlab="",ylab="")
+legend("center","c(x,y)",c("Permuted null distribution","Observed"),col=c("#848B9B","#25282E"),pch=c(15,NA),lwd=c(NA,6),pt.cex=5, bg="white",cex=1.6)
+
+for(i in c(5,8,10)){ #whites
+hist(permuted[1,i,],xlim=c(min(permuted[1,i,],result[1,i]),max(permuted[1,i,],result[1,i])),main=traits[i],col="#848B9B",cex.main=2,cex.lab=2,ylab="",xlab=expression(Delta[alpha]))
+abline(v=result[1,i],col="#25282E",lwd=6)
+}
+dev.off()
+
+pdf("BrownTests.pdf",height=7,width=17,pointsize=18)
+par(mfrow=c(2,2),mar=c(5,4,4,2))
+
+plot(NULL,xlim=c(0,1),ylim=c(0,1),axes=F,xlab="",ylab="")
+legend("center","c(x,y)",c("Permuted null distribution","Observed"),col=c("#848B9B","#25282E"),pch=c(15,NA),lwd=c(NA,6),pt.cex=5, bg="white",cex=1.6)
+
+for(i in c(5,8,10)){ #browns
+hist(permuted[2,i,],xlim=c(min(permuted[2,i,],result[2,i]),max(permuted[2,i,],result[2,i])),main=traits[i],col="#848B9B",cex.main=2,cex.lab=2,ylab="",xlab=expression(Delta[alpha]))
+abline(v=result[2,i],col="#25282E",lwd=6)
+}
+dev.off()
+```
+
+Plots below show cumulative sum.
+
+```{r}
+
+### Calculations and Pretty plots below (white)
+
+#cum.w.ew <-c(white[[5]]$alpha[1]*white[[5]]$deltaP[1])
+#for(i in 2:nrow(white[[5]])){
+#  print(i)
+#  cum.w.ew[i] <- cum.w.ew[i-1]+white[[5]]$alpha[i]*white[[5]]$deltaP[i]
+#}
+
+is.odd <- function(x) x %% 2 != 0
+
+chrColors <- white[[5]]$chr
+chrColors[which(is.odd(chrColors))] <- "#848B9B"
+chrColors[which(is.odd(as.numeric(chrColors))==F)] <- "#25282E" #Warning OK
+
+plotrows<-white[[1]][,c(5,6,7)]
+plotrows<-cbind(plotrows,1:nrow(plotrows))
+names(plotrows)[4]<-"index"
+
+png("cumulative_white.png",height=7,width=17,units="in",res=200,pointsize=18)
+plot(cum.w.ew,col=chrColors,xaxt="n",xlab="chromosome",ylab="Cum. sum",cex.legend=2,cex.main=2,main="Egg Weight")
+abline(h=quantile(permuted[1,5,],c(0.025,0.975)),col="darkblue")
+legend("topleft","c(x,y)","Significance thresholds",col="darkblue",pch="=", bg="white",cex=1.7)
+axis(1,1:28,at=aggregate( plotrows$index,by=list(plotrows$chr),FUN=median)$x)
+dev.off()
+
+### Calculations and pretty plots below (brown)
+#cum.b.ew <- c(brown[[5]]$alpha[1]*brown[[5]]$deltaP[1])
+#for(i in 2:nrow(brown[[5]])){
+#  print(i)
+#  cum.b.ew[i] <- cum.b.ew[i-1]+brown[[5]]$alpha[i]*brown[[5]]$deltaP[i]
+#}
+
+
+is.odd <- function(x) x %% 2 != 0
+
+chrColors <- brown[[5]]$chr
+chrColors[which(is.odd(chrColors))] <- "#848B9B"
+chrColors[which(is.odd(as.numeric(chrColors))==F)] <- "#25282E" #Warning OK
+
+plotrows<-brown[[5]][,c(5,6,7)]
+plotrows<-cbind(plotrows,1:nrow(plotrows))
+names(plotrows)[4]<-"index"
+
+
+png("cumulative_brown.png",height=7,width=17,units="in",res=200,pointsize=18)
+plot(cum.b.ew,col=chrColors,xaxt="n",xlab="chromosome",ylab="Cum. sum",cex.legend=2,cex.main=2,main="Egg Weight")
+abline(h=quantile(permuted[2,5,],c(0.025,0.975)),col="darkblue")
+legend("topright","c(x,y)","Significance thresholds",col="darkblue",pch="=", bg="white",cex=1.7)
+axis(1,1:28,at=aggregate( plotrows$index,by=list(plotrows$chr),FUN=median)$x)
+dev.off()
+
+```
