@@ -1,0 +1,201 @@
+---
+title: "Analysis of simulated data to test for polygenic selection -- rrBlup style (Drift)"
+output: html_document
+author: Timothy Beissinger
+date: 5-24-2016
+---
+
+### Run information
+**Drift was simulated (No Selection)**
+
+**Effects estimated via GWAS**
+
+**100 QTL in total (10 per chromosome)**
+
+### Summary
+We have been exploring using the sum of allele-frequency-change * allele-substitution-effect in breeding populations as a test for selection on polygenic traits, whether or not individual loci show evidence of a significant association with a trait via selection mapping, GWAS, or QTL mapping. Data-based studies look promising, but to truly evaluate this test statistic we're exploring simulated data. In this R-markdown file I will load simulation results that involve a selected population with phenotypic data, pre-selection genotypes, and post-selection genotypes. I will estimate SNP effect sizes and also calculate allele frequency change over time, then assess whether or not there is significant evidence of polygenic selection.
+
+### Load simulation data
+
+Simulations were performed on the IRCF biocluster using QMSim.
+
+```{r}
+directory="r_qtl_100_rnd"
+
+pheno <- read.table(paste(directory, "/Line 1_data_001.txt",sep=""),header=T,stringsAsFactors=F)
+map <- read.table(paste(directory, "/lm_mrk_001.txt",sep=""),header=T,stringsAsFactors=F)
+geno <- read.table(paste(directory, "/Line 1_mrk_001_head.txt",sep=""),header=F,stringsAsFactors=F,skip=1,sep="", colClasses=c("numeric","character")) # read genos as characters
+qtlMap <- read.table(paste(directory, "/lm_qtl_001.txt",sep=""),header=T,stringsAsFactors=F)
+```
+
+### Manipulate simulation data
+
+Genotype files are in a strange format. Reorganize by coding to -1,0,1 and so that markers are columns, individuals are rows.
+
+```{r}
+gen <- matrix(NA,nrow=nrow(map),ncol=nrow(geno))
+gen <- as.data.frame(gen)
+names(gen) <- geno[,1]
+for(i in 1:1000){
+  #print(i)
+  tmp <- as.numeric(unlist(strsplit(geno[i,2],split="")))
+  tmp[which(tmp == 0)] <- -1
+  tmp[which(tmp == 3 | tmp ==4)] <- 0
+  tmp[which(tmp==2)] <- 1
+  gen[,i] <- tmp
+}
+gen<-t(gen)
+#geno2 <- cbind(as.numeric(rownames(gen)),gen) #gapit genotype file
+#rm(gen) # free up memory
+#rm(geno)
+gc()
+colnames(gen) <- c(map$ID)
+# need to make geno2 a numeric matrix. I think it is character right now :-(
+```
+
+
+###rr-BLUP
+
+At this point, we'll load rrBLUP and use it to estimate marker effects.
+
+```{r}
+#library(compiler)
+#library(MASS)
+#source("http://www.zzlab.net/GAPIT/emma.txt")
+#source("http://www.zzlab.net/GAPIT/gapit_functions.txt")
+#library(multtest)
+#library('gplots')
+#library('LDheatmap')
+#library('genetics')
+library(rrBLUP)
+#library(scatterplot3d)
+```
+
+Now we can begin to run rrBLUP. The first step is to calculate the A matrix and check if any markers need to be imputed
+
+```{r}
+phen <- as.matrix(pheno[,10:13]) # phenos must be a matrix
+#impute=A.mat(gen, max.missing=0.5,impute.method="mean",return.imputed=T)
+#gen.imputed <- impute$imputed
+```
+
+
+Now we can define the training and validation populations.
+```{r}
+train <- sample(1000,600)
+test <- setdiff(1:1000,train)
+Pheno_train <- phen[train,4] ###
+m_train <- gen[train,]
+Pheno_valid <- phen[test,4] ###
+m_valid <- gen[test,]
+```
+
+So far so good. Now it is time to run mixed.solve to do the genomic prediction using rr_blup and then validate.
+```{r}
+answer <- mixed.solve(Pheno_train, Z=m_train, K=NULL, SE=F, return.Hinv=FALSE, method="ML")
+effects <- answer$u
+effects.mat = as.matrix(effects)
+
+# validate
+pred_phen_valid <- m_valid %*% effects.mat
+predicted_valid <- (pred_phen_valid[,1] + answer$beta)
+#predicted_valid
+plot(Pheno_valid,predicted_valid)
+cor(Pheno_valid,predicted_valid)
+```
+
+Check how overfit the model is...
+```{r}
+pred_phen_train = m_train %*% effects.mat
+predicted_train = pred_phen_train[,1] +answer$beta
+cor(Pheno_train, predicted_train)
+plot(Pheno_train, predicted_train)
+```
+
+Next up, we should calculate allele frequencies
+```{r}
+freqs0<-read.table(paste(directory, "/Line 1_freq_mrk_001.txt",sep=""),header=T,nrows=length(effects),fill=T,stringsAsFactors=F)
+names(freqs0)[4]<- "Allele1"
+names(freqs0)[5]<- "Allele2"
+freqs0$Allele2[which(substr(freqs0$Allele1,1,1)==2)] <- "2:1.00000" # put this in the spot for the second allele
+freqs0$Allele1[which(substr(freqs0$Allele1,1,1)==2)] <- "1:0.00000" 
+freqs0$Allele1 <- as.numeric(substr(freqs0$Allele1,3,1000))
+freqs0$Allele2 <- as.numeric(substr(freqs0$Allele2,3,1000))
+
+freqs20<-read.table(paste(directory, "/Line 1_freq_mrk_001.txt",sep=""),header=F,skip={4*length(effects)+1},fill=T,stringsAsFactors=F)
+names(freqs20)[4]<- "Allele1"
+names(freqs20)[5]<- "Allele2"
+freqs20$Allele2[which(substr(freqs20$Allele1,1,1)==2)] <- "2:1.00000" # put this in the spot for the second allele
+freqs20$Allele1[which(substr(freqs20$Allele1,1,1)==2)] <- "1:0.00000" 
+freqs20$Allele1 <- as.numeric(substr(freqs20$Allele1,3,1000))
+freqs20$Allele2 <- as.numeric(substr(freqs20$Allele2,3,1000))
+```
+
+
+## Excitement! Now we can look at the correlation of change and effect size
+```{r}
+change1<-freqs20$Allele1-freqs0$Allele1
+change2<-freqs20$Allele2-freqs0$Allele2
+
+plot(change2,effects)
+cor.test(change2, effects,use="pairwise.complete.obs")
+```
+
+## Now we can compute our test statistic, do a permutation test, and make a manhattan plot
+```{r}
+# First, compute three statistics of interest
+Qstat <- change2 * effects
+Qstat_corrected <- abs(change2 * effects)/(freqs0$Allele2*(1-freqs0$Allele2))
+Qstat_genome <- sum(change2*effects, na.rm=T)
+Qstat_genome
+
+# Now do the permutation test
+Qstat_perm_high<-c()
+Qstat_perm_low<-c()
+Qstat_corrected_perm_high <- c()
+
+Qstat_genome_shuffled <- c()
+
+for(i in 1:1000){
+  #print(i)
+  change2_index <- sample(length(change2),length(change2),replace=F)
+  change2_shuffle <- change2[change2_index]
+  freqs0_Allele2_shuffle <- freqs0$Allele2[change2_index]
+  effects_shuffle <- sample(effects,length(effects),replace=F)
+
+  Qstat_shuffle <- change2_shuffle*effects_shuffle
+  Qstat_corrected_shuffle <- abs(change2_shuffle*effects_shuffle)/(freqs0_Allele2_shuffle *(1-freqs0_Allele2_shuffle))
+  
+  Qstat_perm_high[i] <- quantile(Qstat_shuffle,0.99999,na.rm=T)
+  Qstat_perm_low[i] <- quantile(Qstat_shuffle,0.00001,na.rm=T)
+  Qstat_corrected_perm_high[i] <- quantile(Qstat_corrected_shuffle,0.99999,na.rm=T)
+  
+  Qstat_genome_shuffled[i] <- sum(Qstat_shuffle,na.rm=T)
+}
+
+Qstat_upper <- quantile(Qstat_perm_high,0.975)
+Qstat_lower <- quantile(Qstat_perm_low,0.025)
+Qstat_corrected_upper <- quantile(Qstat_corrected_perm_high,0.975)
+
+
+for(i in 1:10){
+start<-i*10000-9999
+end<-i*10000
+par(mfrow=c(2,1))
+plot(map$Position[start:end],Qstat[start:end],ylab="Qstat", xlab="cM",main=paste("chromosome", i),ylim=c(min(Qstat,Qstat_lower,na.rm=T),max(Qstat,Qstat_upper,na.rm=T)))
+abline(v=qtlMap$Position[1:10])
+abline(h=c(Qstat_upper,Qstat_lower),col="red")
+
+plot(map$Position[start:end],Qstat_corrected[start:end],ylab="Qtat_corrected",xlab="cM",main=paste("chromosome", i),ylim=c(0,max(Qstat_corrected,Qstat_corrected_upper,na.rm=T)))
+abline(v=qtlMap$Position[1:10])
+abline(h=Qstat_corrected_upper,col="red")
+}
+
+#Overall data
+hist(Qstat_genome_shuffled,xlim=c(min(Qstat_genome,Qstat_genome_shuffled,na.rm=T),max(Qstat_genome,Qstat_genome_shuffled,na.rm=T)))
+abline(v=Qstat_genome)
+
+length(which(Qstat>=Qstat_upper | Qstat <= Qstat_lower)) # Number Qstat outliers
+length(which(Qstat_corrected>=Qstat_corrected_upper)) # Number Qstat_corrected outliers
+length(which(abs(Qstat_genome_shuffled) >= abs(Qstat_genome))) / length(Qstat_genome_shuffled) # Qstat_genome p-value
+```
