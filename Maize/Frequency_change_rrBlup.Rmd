@@ -1,7 +1,7 @@
 ---
 title: "WQS Test of Selection"
 author: "Timothy M. Beissinger"
-date: "November 2, 2015"
+date: "17 September, 2016"
 output: html_document
 ---
 
@@ -13,7 +13,7 @@ First we read in the Genotypes and phenotypes. There are not many markers here, 
 
 ```{r}
 ### genos
-setwd("/home/beissinger/Documents/WQS_Prediction/Frequency_change/")
+setwd("/home/beissinger/Documents/ComplexSelection/Maize")
 wqsGeno <- read.csv('../../WQS/DATA/genoWQS_randImp.csv',header=T,stringsAsFactors=F)
 ```
 
@@ -80,7 +80,7 @@ starch <- read.csv('../Previous_G3/wqsSupportingData/starchBlups.csv', head=TRUE
 yield <- read.csv('../Previous_G3/wqsSupportingData/yieldBlups.csv', head=TRUE,stringsAsFactors=F)
 
 ### restore working directory
-setwd("/home/beissinger/Documents/WQS_Prediction/Frequency_change/")
+setwd("/home/beissinger/Documents/ComplexSelection/Maize")
 ```
 
 Now reformat genotypes file. Reorganize by coding to -1,0,1 and so that markers are columns, individuals are rows.
@@ -112,6 +112,7 @@ rrblupFunction <- function(geno, pheno, map,main){
     cycleIndNum[4] <- length(which(pheno2$Cycle=='C3'))
     cycleIndNum[5] <- length(which(pheno2$Cycle=='C4'))
     yr <- as.character(pheno2$Cycle)
+    yr <- as.factor(yr)
     pheno2 <- pheno2[, c(1, 2)]
     
     ##Remove individuals with missing phenoypte (these rows were in phenotype file as NA)
@@ -120,13 +121,20 @@ rrblupFunction <- function(geno, pheno, map,main){
     print(paste("In total", nrow(geno3), "individuals."))
 
     #run rrBLUP
-    result <- mixed.solve(pheno2[,2], Z= as.matrix(geno2[,2:ncol(geno2)]), K=NULL, SE=F, return.Hinv=FALSE,method="ML") #don't use cycle as a covariate!
+
     
+    #result <- mixed.solve(pheno2[,2], Z= as.matrix(geno2[,2:ncol(geno2)]),   K=NULL, SE=F, return.Hinv=FALSE,method="ML") # cycle NOT included as a covariate!
+    
+    #below is code to include cycle as a covariate
+    fixedMat <- model.matrix(pheno2[,2]~yr) #model matrix for years
+    
+    result <- mixed.solve(pheno3[,2], Z= as.matrix(geno3[,2:ncol(geno3)]),X= model.matrix(pheno2[,2]~yr),   K=NULL, SE=F, return.Hinv=FALSE,method="ML") # cycle INCLUDED as a covariate!
+
     ##Plot predicted vs actual
     effects <- result$u
     effects.mat <- as.matrix(effects)
     predicted <- as.matrix(geno2[,2:ncol(geno2)]) %*% effects.mat
-    predicted = predicted[,1] + result$beta
+    predicted = predicted[,1] + result$beta[1]
     plot(pheno2[,2],predicted,xlab="True phenos",ylab="Predicted phenos",main=main)
     
     return(result$u)
@@ -161,7 +169,7 @@ drymat_result <- sum(change*effects.drymat,na.rm=T)
 Now do a quick permutation test. Are there reason that permuting SNPs is not a valid approach? (I can't think of any at the moment)
 ```{r}
 adf_test<-c(); ndf_test<-c(); ivd_test<-c(); cp_test<-c(); starch_test<-c(); yield_test<-c(); drymat_test<-c()
-for(i in 1:1000){
+for(i in 1:10000){
   boot <- sample(change,length(change),replace=T)
   adf_test[i]<-sum(boot*effects.ADF,na.rm=T)
   ndf_test[i]<-sum(boot*effects.NDF,na.rm=T) 
@@ -178,13 +186,13 @@ Plots below show the distribution of null tests compared to the observed value. 
 
 
 ```{r,echo=FALSE}
-hist(adf_test,xlim=sort(c(-1.25*adf_result,1.25*adf_result)), main="ADF test for quantitative selection")
+hist(adf_test,xlim=sort(c(-1.25*adf_result,1*adf_result)), main="ADF test for quantitative selection")
 abline(v=adf_result,col="red")
 legend("topright","c(x,y)",c("Observed ADF test stat"),col="red",pch="|")
 
-png("ADF_rrblup.png",pointsize=18, height=600, width=800)
+png("ADF_rrblmodel.matrix(pheno2[,2]~yr)up.png",pointsize=18, height=600, width=800)
 par(mar=c(5.1,5.1,4.1,2.1))
-hist(adf_test,xlim=sort(c(-1.25*adf_result,1.25*adf_result)), main="Acid Detergent Fiber",cex.main=2,cex.lab=2)
+hist(adf_test,xlim=sort(c(-1.25*adf_result,1*adf_result)), main="Acid Detergent Fiber",cex.main=2,cex.lab=2)
 abline(v=adf_result,col="red",lwd=5)
 legend("topright","c(x,y)",c("Observed ADF test stat"),col="red",pch="|")
 dev.off()
@@ -212,13 +220,13 @@ abline(v=ivd_result,col="red",lwd=5)
 legend("topleft","c(x,y)","Observed IVTD test stat",col="red",pch="|")
 dev.off()
 
-hist(cp_test,xlim=sort(c(-3*cp_result,3*cp_result)),main="CP test for quantitative selection")
+hist(cp_test,xlim=sort(c(-2*cp_result,2*cp_result)),main="CP test for quantitative selection")
 abline(v=cp_result,col="red")
 legend("topright","c(x,y)","Observed CP test stat",col="red",pch="|")
 
 png("CP_rrblup.png",pointsize=18, height=600, width=800)
 par(mar=c(5.1,5.1,4.1,2.1))
-hist(cp_test,xlim=sort(c(-3*cp_result,3*cp_result)),main="Crude Protein",cex.main=2,cex.lab=2)
+hist(cp_test,xlim=sort(c(-2*cp_result,2*cp_result)),main="Crude Protein",cex.main=2,cex.lab=2)
 abline(v=cp_result,col="red",lwd=5)
 legend("topright","c(x,y)","Observed CP test stat",col="red",pch="|")
 dev.off()
@@ -235,7 +243,7 @@ abline(v=starch_result,col="red",lwd=5)
 legend("topleft","c(x,y)","Observed starch test stat",col="red",pch="|")
 dev.off()
 
-hist(yield_test,xlim=sort(c(-1.25*yield_result,1.25*yield_result)),main="Yield test for quantitative selection")
+hist(yield_test,xlim=sort(c(-1*yield_result,1.25*yield_result)),main="Yield test for quantitative selection")
 abline(v=yield_result,col="red")
 legend("topright","c(x,y)","Observed yield test stat",col="red",pch="|")
 
@@ -246,13 +254,13 @@ abline(v=yield_result,col="red",lwd=5)
 legend("topleft","c(x,y)","Observed yield test stat",col="red",pch="|")
 dev.off()
 
-hist(drymat_test,xlim=sort(c(-8*drymat_result,8*drymat_result)),main="Dry matter test for quantitative selection")
+hist(drymat_test,xlim=sort(c(-5*drymat_result,5*drymat_result)),main="Dry matter test for quantitative selection")
 abline(v=drymat_result,col="red")
 legend("topright","c(x,y)","Observed dry matter test stat",col="red",pch="|")
 
 png("DryMatter_rrblup.png",pointsize=18, height=600, width=800)
 par(mar=c(5.1,5.1,4.1,2.1))
-hist(drymat_test,xlim=sort(c(-8*drymat_result,8*drymat_result)),main="Dry Matter",cex.main=2,cex.lab=2)
+hist(drymat_test,xlim=sort(c(-5*drymat_result,5*drymat_result)),main="Dry Matter",cex.main=2,cex.lab=2)
 abline(v=drymat_result,col="red",lwd=5)
 legend("topright","c(x,y)","Observed dry matter test stat",col="red",pch="|")
 dev.off()
